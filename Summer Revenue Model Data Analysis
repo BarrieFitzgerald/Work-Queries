@@ -1,0 +1,143 @@
+select              a.term_desc, 
+                    a.term,
+                    a.crn,
+                    a.course_type_code, 
+                    a.course_type,
+                    fct.pidm,
+                    --f_shared_loc_ct_aa(a.term, a.crn) as xlisted,
+                    sra.F_SHARED_LOC_Courses@sra_appsprod(a.term, a.crn) as xlisted_level,
+                    a.course_college, 
+                    a.course_department,
+                    a.subject_code, 
+                    a.course_number,
+                    a.course_section,
+                    a.course_credit_hr,
+                    count(distinct a.term||a.crn) as numb_sections,
+                    count(a.pidm) as seats_taken, 
+                    sum(a.course_credit_hr) as sch_generated,
+                    round(sum(a.tuition), 0) as course_revenue,
+                    round(sum(a.refund), 0) as refunds, 
+                    round(sum(a.waiver), 0) as waivers, 
+                    round(sum(a.tuition) + 
+                            sum(a.refund) + 
+                            sum(a.waiver), 0) as total_course_revenue
+                    
+
+from                (   select              sct.pidm, 
+                                            sct.term_desc, 
+                                            sct.term,
+                                            sct.crn, 
+                                            sct.course_type_code, 
+                                            sct.course_type,
+                                            sct.subject_code, 
+                                            sct.course_number,
+                                            sct.course_credit_hr, 
+                                            sct.course_section,
+                                            sct.course_college,
+                                            sct.course_department,
+                                            sct.course_department_code,
+                                            str.tuition_rate * sct.course_credit_hr as tuition, 
+                                            str.refund_rate * sct.course_credit_hr as refund,
+                                            str.waiver_rate * sct.course_credit_hr as waiver
+
+                        from                (   select              pidm, 
+                                                                    term_desc, 
+                                                                    term,
+                                                                    crn, 
+                                                                    course_type, 
+                                                                    course_type_code,
+                                                                    subject_code, 
+                                                                    course_number, 
+                                                                    course_campus, 
+                                                                    course_credit_hr,
+                                                                    course_department,
+                                                                    course_department_code,
+                                                                    course_section,
+                                                                    course_college,
+                                                                    case
+                                                                        when subject_code = 'COOP' then 'coop'
+                                                                        when substr(course_number, 1, 1) >= '5'  
+                                                                            and subject_code in ('SOWK', 'NURS') then 'g base'
+                                                                        /*bdf: hardcoded this student as the when got to the tuition
+                                                                            aspect of it he/she was only charged online tuition*/
+                                                                        when pidm = '90001920' 
+                                                                            and course_number = '7899' then 'g online'
+                                                                        when subject_code = 'MBA'
+                                                                            and course_campus_code = '5'
+                                                                            and course_number in (  '7810', '7830', '7870', '7800', 
+                                                                                                    '7899', '7640', '7820', '7840', 
+                                                                                                    '7850', '7860') then 'hmo'
+                                                                        when course_campus_code in ('EL', 'SP', 'EU', 'EM') then 'ug online'
+                                                                        when student_level_code != 'US'
+                                                                            and course_campus_code = 'CB' then 'g online'
+                                                                        /*noticed when got to tuition aspect prior to summer 2016
+                                                                            tuition (g/ug) was based on course number*/
+                                                                        when term <= '201605'
+                                                                            and substr(course_number, 1, 1) <= '4'
+                                                                            and course_campus_code = '5' then 'ug online'
+                                                                        /*noticed tuition aspect for summer 2017 going forward
+                                                                            tuition (g/ug) was based on student level*/
+                                                                        when term >= '201705'
+                                                                            and student_level_code = 'US'
+                                                                            and course_campus_code = '5' then 'ug online'
+                                                                        /*same as above*/
+                                                                        when term <= '201605'
+                                                                            and substr(course_number, 1, 1) >= '5'
+                                                                            and course_campus_code = '5' then 'g online'
+                                                                        /*same as above*/
+                                                                        when term >= '201705'
+                                                                            and student_level_code != 'US'
+                                                                            and course_campus_code = '5' then 'g online'
+                                                                        when student_level_code = 'US'
+                                                                            and course_campus_code in ('F', 'Z', 'C', 'DHY', 'CC', 'A', '3') then 'ug base'
+                                                                        when student_level_code != 'US'
+                                                                            and course_campus_code in ('F', 'Z', 'C', 'MS', 'CC', 'A', '3') then 'g base'
+                                                                        when course_campus_code = 'MS' then 'g base'
+                                                                        when course_campus_code = '7' then 'wmba'
+                                                                        when course_campus_code = '6' then 'ecore'
+                                                                        when course_campus_code = 'GML' then 'goml'
+                                                                        when course_campus_code = 'HMO' then 'hmo'
+                                                                    end as bucket_code
+
+                                                from                odi.student_course_term 
+                                                where               substr(term, -1) = '5'  ) sct
+
+                            left outer
+                                join        student_tuition_rates str
+                                    on      str.pidm = sct.pidm
+                                            and str.term = sct.term
+                                            and str.bucket_code = sct.bucket_code                         
+
+                            left outer
+                                join        banner_cube.dim_person dp
+                                    on      dp.pidm = sct.pidm                    
+
+                    ) a
+
+    left outer
+        join        odi.faculty_course_term fct
+            on      fct.term = a.term
+                    and fct.crn = a.crn
+                    and fct.fac_primary_ind = 'Y'
+
+where               a.term in ('201505') --, '201605', '201705')
+                    
+group by            a.course_college, 
+                    a.course_department,
+                    a.subject_code, 
+                    a.course_number,
+                    a.course_section,
+                    a.term_desc, 
+                    a.term, 
+                    a.crn,
+                    a.course_credit_hr, 
+                    fct.pidm, 
+                    a.course_type_code, 
+                    a.course_type
+
+order by            a.term_desc,
+                    a.crn, 
+                    a.course_college, 
+                    a.course_department, 
+                    a.subject_code, 
+                    a.course_number                                    
