@@ -1,0 +1,150 @@
+--create table enrollment_predictions as 
+
+select              dt.term_code, 
+                    row_number() over(order by dt.term_code) as x,
+                    floor((algo.total_intercept + (algo.total_slope * 
+                                            row_number() over(order by dt.term_code)) - 
+                        algo.se_total) * algo.avg_ma_total) as predicted_low_total,
+                    floor((algo.adm_intercept + (algo.adm_slope * 
+                                            row_number() over(order by dt.term_code)) - 
+                        algo.se_adm) * algo.avg_ma_adm) + 
+                            floor((algo.oth_intercept + (algo.oth_slope * 
+                                                    row_number() over(order by dt.term_code)) - 
+                                algo.se_oth) * algo.avg_ma_other) as predicted_low_total_v2,
+                    floor((algo.adm_intercept + (algo.adm_slope * 
+                                            row_number() over(order by dt.term_code)) - 
+                        algo.se_adm) * algo.avg_ma_adm) as predicted_low_adm, 
+                    floor((algo.oth_intercept + (algo.oth_slope * 
+                                            row_number() over(order by dt.term_code)) - 
+                        algo.se_oth) * algo.avg_ma_other) as predicted_low_oth
+
+from                banner_cube.dim_time dt
+
+    left outer
+        join        (   select              distinct
+                                            substr(term, -1) as sem, 
+                                            avg_ma_total, 
+                                            total_intercept, 
+                                            total_slope, 
+                                            sqrt(sum(power(y_yhat_total, 2)) over(partition by 1) / 
+                                                (count(distinct term) over(partition by 1) - 2)) as se_total, 
+                                            avg_ma_adm,
+                                            adm_intercept, 
+                                            adm_slope, 
+                                            sqrt(sum(power(y_yhat_adm, 2)) over(partition by 1) / 
+                                                (count(distinct term) over(partition by 1) - 2)) as se_adm, 
+                                            avg_ma_other,
+                                            oth_intercept, 
+                                            oth_slope, 
+                                            sqrt(sum(power(y_yhat_oth, 2)) over(partition by 1) / 
+                                                (count(distinct term) over(partition by 1) - 2)) as se_oth
+
+                        from                (   select              x,
+                                                                    b.sem,
+                                                                    a.term,
+                                                                    a.total_hc, 
+                                                                    b.avg_ma_total,
+                                                                    regr_intercept(a.total_hc / b.avg_ma_total, x) over(partition by 1) as total_intercept,
+                                                                    regr_slope(a.total_hc / b.avg_ma_total, x) over(partition by 1) as total_slope,
+                                                                    (a.total_hc / b.avg_ma_total) - (regr_intercept(a.total_hc / b.avg_ma_total, x) over(partition by 1) +
+                                                                                                    (x * regr_slope(a.total_hc / b.avg_ma_total, x) over(partition by 1))) as y_yhat_total, 
+                                                                    a.adm_hc, 
+                                                                    b.avg_ma_adm,
+                                                                    regr_intercept(a.adm_hc / b.avg_ma_adm, x) over(partition by 1) as adm_intercept,
+                                                                    regr_slope(a.adm_hc / b.avg_ma_adm, x) over(partition by 1) as adm_slope,
+                                                                    (a.adm_hc / b.avg_ma_adm) - (regr_intercept(a.adm_hc / b.avg_ma_adm, x) over(partition by 1) +
+                                                                                                (x * regr_slope(a.adm_hc / b.avg_ma_adm, x) over(partition by 1))) as y_yhat_adm, 
+                                                                    a.other_hc, 
+                                                                    b.avg_ma_other,
+                                                                    regr_intercept(a.other_hc / b.avg_ma_other, x) over(partition by 1) as oth_intercept,
+                                                                    regr_slope(a.other_hc / b.avg_ma_other, x) over(partition by 1) as oth_slope,
+                                                                    (a.other_hc / b.avg_ma_other) - (regr_intercept(a.other_hc / b.avg_ma_other, x) over(partition by 1) +
+                                                                                                (x * regr_slope(a.other_hc / b.avg_ma_other, x) over(partition by 1))) as y_yhat_oth
+
+                                                from                (   select              std.term, 
+                                                                                            row_number() over(order by std.term) as x,
+                                                                                            count(distinct std.pidm) as total_hc, 
+                                                                                            sum(distinct adm.hc) as adm_hc, 
+                                                                                            count(distinct std.pidm) - 
+                                                                                                sum(distinct adm.hc) as other_hc
+
+                                                                        from                odi.student_term_details std
+
+                                                                                join        (   select          term_entry as term, 
+                                                                                                                count(distinct pidm) as hc
+                                                                                                                        
+                                                                                                from            banner_cube.fact_admissions_all 
+                                                                                                                        
+                                                                                                where           decision_no = max_decision_no
+                                                                                                                and appl_status_code != 'I'
+                                                                                                                and accept_ind = 'Y'
+                                                                                                                and term_entry_enrolled = 'Enrolled' 
+                                                                                                                --and student_type_code = 'F'
+                                                                                                                        
+                                                                                                group by        term_entry             ) adm
+                                                                                    on      adm.term = std.term                                                                                 
+
+                                                                        where               std.term <= '201708'
+
+                                                                        group by            std.term    ) a
+
+                                                        join        (   select              sem, 
+                                                                                            (total_sems / sum(avg_ma_total) over(partition by 1)) *
+                                                                                                avg_ma_total as avg_ma_total, 
+                                                                                            (total_sems / sum(avg_ma_adm) over(partition by 1)) *
+                                                                                                avg_ma_adm as avg_ma_adm,
+                                                                                             (total_sems / sum(avg_ma_other) over(partition by 1)) *
+                                                                                                avg_ma_other as avg_ma_other
+
+                                                                        from                (   select              sem,
+                                                                                                                    count(distinct sem) over(partition by 1) as total_sems,
+                                                                                                                    avg(avg_ma_total) as avg_ma_total,
+                                                                                                                    avg(avg_ma_adm) as avg_ma_adm, 
+                                                                                                                    avg(avg_ma_other) as avg_ma_other
+
+                                                                                                from                (   select              sem, 
+                                                                                                                                            total_y / ((total_ma +
+                                                                                                                                                lag(total_ma, 1) over(order by term desc)) / 2) as avg_ma_total, 
+                                                                                                                                            adm_y / ((adm_ma +
+                                                                                                                                                lag(adm_ma, 1) over(order by term desc)) / 2) as avg_ma_adm, 
+                                                                                                                                            other_y / ((other_ma +
+                                                                                                                                                lag(other_ma, 1) over(order by term desc)) / 2) as avg_ma_other
+
+                                                                                                                        from                (   select              substr(std.term, -1) as sem, 
+                                                                                                                                                                    std.term, 
+                                                                                                                                                                    count(distinct std.pidm) as total_y,
+                                                                                                                                                                    (count(distinct std.pidm) + 
+                                                                                                                                                                        lag(count(distinct std.pidm), 1) over(order by std.term) +
+                                                                                                                                                                        lag(count(distinct std.pidm), 2) over(order by std.term)    ) /  (1 + 1 + 1) as total_ma,
+                                                                                                                                                                    sum(distinct faa.adm_y) as adm_y,
+                                                                                                                                                                    (sum(distinct faa.adm_y) + 
+                                                                                                                                                                        lag(sum(distinct faa.adm_y), 1) over(order by std.term) +
+                                                                                                                                                                        lag(sum(distinct faa.adm_y), 2) over(order by std.term)    ) /  (1 + 1 + 1) as adm_ma, 
+                                                                                                                                                                    count(distinct std.pidm) - sum(distinct faa.adm_y) as other_y,
+                                                                                                                                                                    (count(distinct std.pidm) - sum(distinct faa.adm_y) + 
+                                                                                                                                                                        lag(count(distinct std.pidm) - sum(distinct faa.adm_y), 1) over(order by std.term) +
+                                                                                                                                                                        lag(count(distinct std.pidm) - sum(distinct faa.adm_y), 2) over(order by std.term)    ) /  (1 + 1 + 1) as other_ma                     
+
+                                                                                                                                                from                odi.student_term_details std                   
+                                                                                                                                                                            
+                                                                                                                                                    left outer
+                                                                                                                                                        join        (   select      term_entry as term,
+                                                                                                                                                                                    count(distinct pidm) as adm_y
+                                                                                                                                                                        from        banner_cube.fact_admissions_all 
+                                                                                                                                                                        where       decision_no = max_decision_no
+                                                                                                                                                                                    and appl_status_code != 'I'
+                                                                                                                                                                                    and accept_ind = 'Y'
+                                                                                                                                                                                    and term_entry_enrolled = 'Enrolled'    
+                                                                                                                                                                        group by    term_entry  ) faa
+                                                                                                                                                            on      faa.term = std.term                                                            
+
+                                                                                                                                                where               std.term <= '201708'
+
+                                                                                                                                                group by            std.term    )   )
+
+                                                                                                group by            sem     )  ) b
+                                                            on      b.sem = substr(a.term, -1)  ) ) algo
+            on      algo.sem = substr(dt.term_code, -1)                                                                            
+
+
+where               dt.term_code <= '201808' 
