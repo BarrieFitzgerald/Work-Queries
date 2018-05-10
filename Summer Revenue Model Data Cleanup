@@ -1,0 +1,421 @@
+--create table student_tuition_rates as (
+--;
+insert into student_tuition_rates
+--;
+select              term, 
+                    pidm, 
+                    bucket_code, 
+                    /*tuition rate*/
+                    nvl(tuition_rate, 0) + nvl(ga_tuition_rate, 0) as tuition_rate,
+                    /*refund rate*/
+                    nvl(case
+                            when senior_citz is not null then null
+                            else refund_rate
+                        end, 0) as refund_rate,
+                    /*waiver rate*/
+                    -nvl(case
+                            when senior_citz is not null then -tuition_rate
+                            when mowr_waiver is not null then -(mowr_waiver / sch)
+                            when ga_waiver is not null then -(((tuition / (total_tuition - nvl(ga_tuition, 0))) * ga_waiver) / sch)
+                            when emp_oos_waiver is not null 
+                                and tap_waiver is not null then -(emp_oos_waiver + tap_waiver) / sch
+                            when emp_oos_waiver is not null
+                                and base_type = 'base' then -(emp_oos_waiver / base_sch)                           
+                            when tap_waiver is not null then -(tap_waiver / total_sch)
+                            when oos_waiver is not null then -(oos_waiver / sch)
+                            
+                        end, 0) as waiver_rate
+                    
+                    
+
+from                (   select              distinct
+                                            aa.term, 
+                                            aa.pidm, 
+                                            aa.bucket_code, 
+                                            aa.sch, 
+                                            aa.tuition,
+                                            sum(aa.tuition) over(partition by   aa.term, 
+                                                                                aa.pidm, 
+                                                                                cc.total_sch) + nvl(bb.charge_amount, 0) as total_tuition,
+                                            aa.refund, 
+                                            aa.tuition_rate, 
+                                            aa.refund_rate, 
+                                            bb.charge_amount as ga_tuition, 
+                                            ga.ga_waiver,
+                                            cc.total_sch,
+                                            dd.detail_code as senior_citz, 
+                                            ee.mowr_waiver, 
+                                            case
+                                                when lower(aa.bucket_code) like '%base%' then 'base'
+                                                else 'nonbase'
+                                            end as base_type,
+                                            case
+                                                when lower(aa.bucket_code) like '%base%' then aa.sch
+                                                else null
+                                            end as base_sch,
+                                            case
+                                                when lower(aa.bucket_code) like '%base%' then oos.oos_waiver
+                                                else null
+                                            end oos_waiver, 
+                                            empoos.emp_oos_waiver, 
+                                            tap.tap_waiver, 
+                                            case
+                                                when bb.charge_amount is null then null
+                                                when aa.sch is null then null
+                                                when aa.sch = 0 then 0
+                                                else((aa.tuition_rate / sum(aa.tuition_rate) over(partition by  aa.term, 
+                                                                                                                aa.pidm, 
+                                                                                                                cc.total_sch)) * bb.charge_amount) / sch
+                                            end as ga_tuition_rate 
+
+                        from                (   select              a.term, 
+                                                                    a.pidm, 
+                                                                    a.bucket_code, 
+                                                                    a.sch, 
+                                                                    b.tuition, 
+                                                                    b.refund,
+                                                                    round(case
+                                                                            when a.bucket_code = 'coop' then 0
+                                                                            when nvl(a.sch, 0) = 0 then 0
+                                                                            else b.tuition / a.sch
+                                                                        end, 2) as tuition_rate, 
+                                                                    round(case
+                                                                            when a.bucket_code = 'coop' then 0
+                                                                            when nvl(a.sch, 0) = 0 then 0
+                                                                            else b.refund / a.sch
+                                                                        end, 2) as refund_rate
+
+                                                from                (   select              term, 
+                                                                                            pidm, 
+                                                                                            bucket_code, 
+                                                                                            sum(course_credit_hr) as sch
+
+                                                                        from                (   select              term, 
+                                                                                                                    pidm, student_id,
+                                                                                                                    /*creating tuition buckets*/
+                                                                                                                    case
+                                                                                                                        when subject_code = 'COOP' then 'coop'
+                                                                                                                        when substr(course_number, 1, 1) >= '5'  
+                                                                                                                            and subject_code in ('SOWK', 'NURS') then 'g base'
+                                                                                                                        /*bdf: hardcoded this student as the when got to the tuition
+                                                                                                                            aspect of it he/she was only charged online tuition*/
+                                                                                                                        when pidm = '90001920' 
+                                                                                                                            and course_number = '7899' then 'g online'
+                                                                                                                        when subject_code = 'MBA'
+                                                                                                                            and course_campus_code = '5'
+                                                                                                                            and course_number in (  '7810', '7830', '7870', '7800', 
+                                                                                                                                                    '7899', '7640', '7820', '7840', 
+                                                                                                                                                    '7850', '7860') then 'hmo'
+                                                                                                                        when course_campus_code in ('EL', 'SP', 'EU', 'EM') then 'ug online'
+                                                                                                                        when student_level_code != 'US'
+                                                                                                                            and course_campus_code = 'CB' then 'g online'
+                                                                                                                        /*noticed when got to tuition aspect prior to summer 2016
+                                                                                                                            tuition (g/ug) was based on course number*/
+                                                                                                                        when term <= '201605'
+                                                                                                                            and substr(course_number, 1, 1) <= '4'
+                                                                                                                            and course_campus_code = '5' then 'ug online'
+                                                                                                                        /*noticed tuition aspect for summer 2017 going forward
+                                                                                                                            tuition (g/ug) was based on student level*/
+                                                                                                                        when term >= '201705'
+                                                                                                                            and student_level_code = 'US'
+                                                                                                                            and course_campus_code = '5' then 'ug online'
+                                                                                                                        /*same as above*/
+                                                                                                                        when term <= '201605'
+                                                                                                                            and substr(course_number, 1, 1) >= '5'
+                                                                                                                            and course_campus_code = '5' then 'g online'
+                                                                                                                        /*same as above*/
+                                                                                                                        when term >= '201705'
+                                                                                                                            and student_level_code != 'US'
+                                                                                                                            and course_campus_code = '5' then 'g online'
+                                                                                                                        when student_level_code = 'US'
+                                                                                                                            and course_campus_code in ('F', 'Z', 'C', 'DHY', 'CC', 'A', '3') then 'ug base'
+                                                                                                                        when student_level_code != 'US'
+                                                                                                                            and course_campus_code in ('F', 'Z', 'C', 'MS', 'CC', 'A', '3') then 'g base'
+                                                                                                                        when course_campus_code = 'MS' then 'g base'
+                                                                                                                        when course_campus_code = '7' then 'wmba'
+                                                                                                                        when course_campus_code = '6' then 'ecore'
+                                                                                                                        when course_campus_code = 'GML' then 'goml'
+                                                                                                                        when course_campus_code = 'HMO' then 'hmo'
+                                                                                                                    end as bucket_code, 
+                                                                                                                    course_credit_hr
+
+                                                                                                from                odi.student_course_term
+
+                                                                                                where               term >= '201305' 
+                                                                                                                    and substr(term, -1) = '5'
+                                                                                                                    )
+
+                                                                        group by            term, 
+                                                                                            pidm, 
+                                                                                            bucket_code ) a
+
+                                                    left outer
+                                                        join        (   select              *
+
+                                                                        from                (   select              pidm as pidm, 
+                                                                                                                    term_code as term, 
+                                                                                                                    charge_amount as amount, 
+                                                                                                                    trans_source_code as source_code, 
+                                                                                                                    case
+                                                                                                                        /*noticed that nursing grad tuition was only applied by 
+                                                                                                                            user name npgunn as there was no specific grad
+                                                                                                                            nursing tuition*/
+                                                                                                                        when term_code = '201705'
+                                                                                                                            and transaction_user = 'NPGUNN'
+                                                                                                                            and detail_code in  (   'GTUI', 'F001', 'S001', 'X001', 
+                                                                                                                                                            'GTUO', 'F002', 'S002', 'X002', 
+                                                                                                                                                            'F100', 'S100', 'X100', 
+                                                                                                                                                            'F200', 'F201', 'S200', 'S201', 
+                                                                                                                                                            'X200', 'X201') then 'g base'
+                                                                                                                        /*noticed that for this student the tuition was misused
+                                                                                                                            and only the user name mschnake assigned them the 
+                                                                                                                            correct tuition rate*/
+                                                                                                                        when term_code = '201605'
+                                                                                                                            and pidm = '90706591'
+                                                                                                                            and transaction_user = 'MSCHNAKE'
+                                                                                                                            and detail_code = 'ERTG' then 'g online'
+                                                                                                                        when detail_code in ('HMBA', 'HMBO')
+                                                                                                                            and transaction_desc like '%293%' then 'g online'
+                                                                                                                        /*noticed there are not detail codes specific for healthcare
+                                                                                                                            admin online program. the only difference that was noticed
+                                                                                                                            was mschnake as a user*/
+                                                                                                                        when detail_code = 'ERTG'
+                                                                                                                            and transaction_user = 'MSCHNAKE' then 'hmo'
+                                                                                                                        when detail_code in ('COMP', 'ERTG') then 'g online'
+                                                                                                                        when detail_code in ('ERTU', 'EUTU', 'ELAN', 'EMJU') then 'ug online'
+                                                                                                                        when substr(detail_code, 1, 3) in (   'FMB', 'SMB', 'XMB') then 'wmba'
+                                                                                                                        when detail_code in ('FETU', 'SETU', 'XETU', 'ECOR') then 'ecore'
+                                                                                                                        when detail_code in (   'GMLA', 'GMLM', 'GMLM', 
+                                                                                                                                                        'GMLS', 'GMLT', 'GMLE', 
+                                                                                                                                                        'GMLG', 'GMLX') then 'goml'
+                                                                                                                        when detail_code in (   'GTUI', 'F001', 'S001', 'X001', 
+                                                                                                                                                        'GTUO', 'F002', 'S002', 'X002') then 'g base'
+                                                                                                                        when detail_code in (   'F100', 'S100', 'X100', 
+                                                                                                                                                        'F200', 'F201', 'S200', 'S201', 
+                                                                                                                                                        'X200', 'X201') then 'ug base'
+                                                                                                                                                                        
+                                                                                                                        when detail_code in ('HMBA', 'HMBO') then 'hmo'
+                                                                                                                    end as bucket_code
+                                                                                                                                                                                                                    
+
+                                                                                                from                banner_cube.fact_student_transaction
+
+                                                                                                where               detail_code in  (   /*Tuition and refunds*/
+                                                                                                                                                'COMP', 'ECOR', 'ELAN', 'EMJU', 'ERTG', 'ERTU', 'EUTU', 
+                                                                                                                                                /*'F001', 'F002',*/ 
+                                                                                                                                                'F100', 'F200', 'F200', 'F201', 'FETU', 'FMB7', 'FMB8',
+                                                                                                                                                'FMB9', 'GMLA', 'GMLE', 'GMLG', 'GMLM', 'GMLS', 'GMLT', 'GMLX',
+                                                                                                                                                'GTUI', 'GTUO', 'HMBA', 'HMBO', 
+                                                                                                                                                /*'S001', 'S002',*/ 
+                                                                                                                                                'S100', 'S200', 'S200', 'S201', 'SETU', 'SMB7', 'SMB8', 'SMB9', 
+                                                                                                                                                /*'X001', 'X002',*/
+                                                                                                                                                'X100', 'X200', 'X200', 'X201', 'XETU', 'XMB7', 'XMB8', 'XMB9'  )
+                                                                                                                    and term_code >= '201308'
+                                                                                                                    and substr(term_code, -1) = '5'    
+                                                                                                                      )
+                                                                        pivot
+                                                                                            (   sum(amount)
+                                                                                                for source_code in (    'R' as "TUITION", 
+                                                                                                                        'T' as "REFUND"     )   ) ) b
+                                                            on      b.pidm = a.pidm
+                                                                    and b.term = a.term
+                                                                    and b.bucket_code = a.bucket_code   ) aa
+                            left outer
+                                join        (   select              term_code, 
+                                                                    pidm, 
+                                                                    sum(charge_amount) as charge_amount
+                                                                    
+                                                from                banner_cube.fact_student_transaction bb
+
+                                                where               term_code >= '201505'
+                                                                    and detail_code in ( 'F001', 'F002', 'S001', 
+                                                                                        'S002', 'X001', 'X002'  )    
+
+                                                group by            term_code, 
+                                                                    pidm )bb
+                                    on      bb.pidm = aa.pidm
+                                            and bb.term_code = aa.term      
+
+                            left outer
+                                join        (   select          term, 
+                                                                pidm, 
+                                                                sum(course_credit_hr) as total_sch
+                                                from            odi.student_course_term
+                                                where           term >= '201305'
+                                                group by        term, 
+                                                                pidm    ) cc
+                                    on      cc.pidm = aa.pidm
+                                            and cc.term = aa.term                                                                                                        
+
+                            left outer
+                                join        (   select          distinct
+                                                                term_code as term, 
+                                                                pidm as pidm,
+                                                                detail_code as detail_code
+                                                from            banner_cube.fact_student_transaction dd
+                                                where           term_code >= '201305'
+                                                                and detail_code = 'SREX'    ) dd
+                                    on      dd.pidm = aa.pidm
+                                            and dd.term = aa.term
+
+                            left outer
+                                join        (   select              distinct
+                                                                    ma.pidm, 
+                                                                    ma.term_code as term, 
+                                                                    ma.bucket_code, 
+                                                                    case
+                                                                        when sum(ma.amount) over(partition by ma.pidm, 
+                                                                                                        ma.term_code) = 0 then 0
+                                                                        else (sum(ma.amount) over(partition by  ma.pidm, 
+                                                                                                                ma.term_code, 
+                                                                                                                ma.bucket_code) / 
+                                                                               sum(ma.amount) over(partition by ma.pidm, 
+                                                                                                                ma.term_code)) * mb.amount 
+                                                                    end as mowr_waiver 
+                                                                            
+
+                                                from                (   select              pidm, 
+                                                                                            term_code,
+                                                                                            charge_amount as amount, 
+                                                                                            case
+                                                                                                when term_code = '201705'
+                                                                                                    and transaction_user = 'NPGUNN'
+                                                                                                    and detail_code in  (   'GTUI', 'F001', 'S001', 'X001', 
+                                                                                                                                    'GTUO', 'F002', 'S002', 'X002', 
+                                                                                                                                    'F100', 'S100', 'X100', 
+                                                                                                                                    'F200', 'F201', 'S200', 'S201', 
+                                                                                                                                    'X200', 'X201') then 'g base'
+                                                                                                when term_code = '201605'
+                                                                                                    and pidm = '90706591'
+                                                                                                    and transaction_user = 'MSCHNAKE'
+                                                                                                    and detail_code = 'ERTG' then 'g online'
+                                                                                                when detail_code in ('HMBA', 'HMBO')
+                                                                                                    and transaction_desc like '%293%' then 'g online'
+                                                                                                when detail_code = 'ERTG'
+                                                                                                    and transaction_user = 'MSCHNAKE' then 'hmo'
+                                                                                                when detail_code in ('COMP', 'ERTG') then 'g online'
+                                                                                                when detail_code in ('ERTU', 'EUTU', 'ELAN', 'EMJU') then 'ug online'
+                                                                                                when substr(detail_code, 1, 3) in (   'FMB', 'SMB', 'XMB') then 'wmba'
+                                                                                                when detail_code in ('FETU', 'SETU', 'XETU', 'ECOR') then 'ecore'
+                                                                                                when detail_code in (   'GMLA', 'GMLM', 'GMLM', 
+                                                                                                                                'GMLS', 'GMLT', 'GMLE', 
+                                                                                                                                'GMLG', 'GMLX') then 'goml'
+                                                                                                when detail_code in (   'GTUI', 'F001', 'S001', 'X001', 
+                                                                                                                                'GTUO', 'F002', 'S002', 'X002') then 'g base'
+                                                                                                when detail_code in (   'F100', 'S100', 'X100', 
+                                                                                                                                'F200', 'F201', 'S200', 'S201', 
+                                                                                                                                'X200', 'X201') then 'ug base'
+                                                                                                                                                        
+                                                                                                when detail_code in ('HMBA', 'HMBO') then 'hmo'
+                                                                                            end as bucket_code
+
+                                                                        from                banner_cube.fact_student_transaction
+
+                                                                        where               term_code||pidm in (    select      distinct term_code||pidm 
+                                                                                                                                    from        banner_cube.fact_student_transaction 
+                                                                                                                                    where       term_code >= '201305' 
+                                                                                                                                                and detail_code = 'MOWW'            )
+                                                                                            and detail_code in  (   'COMP', 'ECOR', 'ELAN', 'EMJU', 'ERTG', 'ERTU', 'EUTU', 
+                                                                                                                            /*'F001', 'F002',*/ 
+                                                                                                                            'F100', 'F200', 'F200', 'F201', 'FETU', 'FMB7', 'FMB8',
+                                                                                                                            'FMB9', 'GMLA', 'GMLE', 'GMLG', 'GMLM', 'GMLS', 'GMLT', 'GMLX',
+                                                                                                                            'GTUI', 'GTUO', 'HMBA', 'HMBO', 
+                                                                                                                            /*'S001', 'S002',*/ 
+                                                                                                                            'S100', 'S200', 'S200', 'S201', 'SETU', 'SMB7', 'SMB8', 'SMB9', 
+                                                                                                                            /*'X001', 'X002',*/
+                                                                                                                            'X100', 'X200', 'X200', 'X201', 'XETU', 'XMB7', 'XMB8', 'XMB9'  )  ) ma     
+                                                    left outer
+                                                        join        (   select      pidm as pidm, 
+                                                                                    term_code as term_code, 
+                                                                                    sum(charge_amount) as amount
+                                                                        from        banner_cube.fact_student_transaction
+                                                                        where       term_code >= '201305'
+                                                                                    and detail_code = 'MOWW'
+                                                                        group by    pidm, 
+                                                                                    term_code       ) mb
+                                                            on      mb.pidm = ma.pidm
+                                                                    and mb.term_code = ma.term_code ) ee
+                                    on      ee.pidm = aa.pidm
+                                            and ee.term = aa.term
+                                            and ee.bucket_code = aa.bucket_code
+                                                                        
+                            left outer
+                                join        (   select              term_code as term, 
+                                                                    pidm as pidm,
+                                                                    sum(charge_amount) as oos_waiver
+
+                                                from                banner_cube.fact_student_transaction
+
+                                                where               detail_code in (    'A3EX', 'A1EX', 'MHEX', 'BSEX',
+                                                                                        'OTEX', 'I3EX', 'I2EX', 'I1EX', 
+                                                                                        'MHEX', 'MEXP', 'NAEX', 'NREX', 
+                                                                                        'OTEX', 'PREX', 'SMEX', 'PREX', 
+                                                                                        'SEXP'                         )
+                                                                    and term_code >= '201305'                                        
+
+                                                group by            pidm, 
+                                                                    term_code   
+                                                
+                                                /*having              sum(to_number(charge_amount)) > 0*/) oos
+                                    on      oos.pidm = aa.pidm
+                                            and oos.term = aa.term                                       
+                                                 
+
+                            left outer
+                                join        (   select              term_code as term, 
+                                                                    pidm as pidm,
+                                                                    sum(charge_amount) as emp_oos_waiver
+
+                                                from                banner_cube.fact_student_transaction
+
+                                                where               detail_code in ('GTEX', 'PSEX', 'USEX')
+                                                                    and term_code >= '201305'                                        
+
+                                                group by            pidm, 
+                                                                    term_code   
+                                                                        
+                                                /*having              sum(to_number(charge_amount)) > 0*/) empoos
+                                    on      empoos.term = aa.term
+                                            and empoos.pidm = aa.pidm
+                                                                       
+
+                            left outer
+                                join        (   select              term_code as term, 
+                                                                    pidm, 
+                                                                    sum(charge_amount) as ga_waiver
+
+                                                from                banner_cube.fact_student_transaction
+
+                                                where               term_code >= '201305'
+                                                                    and detail_code in ('G1EX', 'G2EX')
+
+                                                group by            term_code, 
+                                                                    pidm ) ga
+                                    on      ga.pidm = aa.pidm
+                                            and ga.term = aa.term
+                                                                      
+
+                            left outer
+                                join        (   select              term_code as term, 
+                                                                    pidm as pidm,
+                                                                    sum(charge_amount) as tap_waiver
+
+                                                from                banner_cube.fact_student_transaction
+
+                                                where               (detail_code in (  'REMU', 'REMG'   )   
+                                                                        and (lower(transaction_desc) not like '%lab fee%'
+                                                                             and lower(transaction_desc) not like '%sgc%'
+                                                                             and lower(transaction_desc) not like '%exchange student%'))
+                                                                    and term_code >= '201305'                                        
+
+                                                group by            pidm, 
+                                                                    term_code   
+                                                                        
+                                                /*having              sum(to_number(charge_amount)) > 0 */) tap
+                                    on      tap.pidm = aa.pidm
+                                            and tap.term = aa.term
+                                            
+                                             )
+where               term = '201705' 
+                     
+                    
