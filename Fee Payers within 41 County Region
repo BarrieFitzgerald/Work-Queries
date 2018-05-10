@@ -1,0 +1,54 @@
+select              count(distinct pidm) 
+
+from                (   select              fst.term_code, 
+                                            fst.pidm, 
+                                            fst.transaction_desc, 
+                                            sum(fst.charge_amount) +  nvl(sum(distinct fst1.waiver), 0) as fee_payer
+
+                        from                banner_cube.fact_student_transaction fst
+
+                            left outer
+                                join        (   select              term_code, 
+                                                                    pidm, 
+                                                                    sum(charge_amount) as waiver
+
+                                                from                banner_cube.fact_student_transaction fst
+
+                                                where               fst.term_code = '201708'
+                                                                    and fst.category_code = 'EXM'
+                                                                    and fst.detail_code in ('MIL4', 'MOWR4', 'REM4')
+
+                                                group by            term_code,
+                                                                    pidm               ) fst1
+                                    on      fst1.pidm = fst.pidm
+                                            and fst1.term_code = fst.term_code                                            
+
+                            left outer
+                                join        odi.student_term_details std
+                                    on      std.pidm = fst.pidm
+                                            and std.term = fst.term_code
+                                            and std.origin_state = 'Georgia' 
+                                            and std.origin_county in (  'Appling',      'Atkinson',     'Bacon',
+                                                                        'Baker',        'Ben Hill',     'Berrien',
+                                                                        'Brantley',     'Brooks',       'Calhoun',
+                                                                        'Camden',       'Charlton',     'Clay',
+                                                                        'Clinch',       'Coffee',       'Colquitt',
+                                                                        'Cook',         'Crisp',        'Decatur',
+                                                                        'Dougherty',    'Early',        'Echols',
+                                                                        'Grady',        'Irwin',        'Jeff Davis',
+                                                                        'Lanier',       'Lee',          'Lowndes',
+                                                                        'Miller',       'Mitchell',     'Pierce',
+                                                                        'Quitman',      'Randolph',     'Seminole',
+                                                                        'Telfair',      'Terrell',      'Thomas',
+                                                                        'Tift',         'Turner',       'Ware',
+                                                                        'Wilcox',       'Worth'                     )
+
+                        where               fst.term_code = '201708'
+                                            and fst.category_code = 'FEE'
+                                            and fst.detail_code in ('HFAC', 'HFCG')
+
+                        group by            fst.term_code,
+                                            fst.pidm,
+                                            fst.transaction_desc                    
+
+                        having              sum(fst.charge_amount) +  nvl(sum(distinct fst1.waiver), 0) > 0 )
