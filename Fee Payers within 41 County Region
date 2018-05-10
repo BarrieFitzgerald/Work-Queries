@@ -23,7 +23,6 @@ from                (   select              fst.term_code,
                                     on      fst1.pidm = fst.pidm
                                             and fst1.term_code = fst.term_code                                            
 
-                            left outer
                                 join        odi.student_term_details std
                                     on      std.pidm = fst.pidm
                                             and std.term = fst.term_code
